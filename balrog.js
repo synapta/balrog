@@ -31,7 +31,7 @@ queryPostgres = function (client, query) {
 csvToPostgres = function (client, tableName, fileName) {
     return new Promise((resolve, reject) => {
         console.log("Loading... (" + tableName +")");
-        var stream = client.query(copyFrom('COPY "' + tableName +'" FROM STDIN WITH (FORMAT csv)'));
+        var stream = client.query(copyFrom('COPY "' + tableName +'" FROM STDIN WITH CSV HEADER'));
         var fileStream = fs.createReadStream("./" + fileName);
         fileStream.on('error', function(error) { reject('Error:', error.message) });
         fileStream.pipe(stream)
@@ -48,7 +48,7 @@ requestSPARQL = function (endpoint, query) {
               'Accept': "text/csv"
             },
             method: 'GET',
-            url: endpoint + "?query=" + encodeURIComponent(query) + "&format=csv",
+            url: endpoint + "?query=" + encodeURIComponent(query) /*+ "&format=csv"*/,
         }, function (error, response, body) {
             if (error) {
                 return reject(error);
@@ -71,7 +71,15 @@ createTableQuery = function (tableName, headArray) {
 
 singleQueryRun = function (client, query, endpoint, done) {
     console.log("Asking " + endpoint + " for " + query);
-    var q = parser.parse(query);
+    var q;
+
+    try {
+        q = parser.parse(query);
+    } catch (e) {
+        console.error(e);
+        done(false);
+    }
+
     var header = [];
     for (var i = 0; i < q.variables.length; i++) {
         header.push(q.variables[i].replace("?",""));
@@ -89,10 +97,16 @@ singleQueryRun = function (client, query, endpoint, done) {
         done(randomName);
     }).catch(error => {
         console.error(error);
+        done(false);
     })
 }
 
-standardResponseJSON = function (finalSelectHeader, postgresArray) {
+standardResponseJSON = function (postgresArray) {
+    var finalSelectHeader = [];
+    for (var j in postgresArray[0]) {
+        finalSelectHeader.push(j);
+    }
+
     var resArray = [];
     for (var i = 0; i < postgresArray.length; i++) {
         var o = {};
@@ -100,6 +114,12 @@ standardResponseJSON = function (finalSelectHeader, postgresArray) {
             o[finalSelectHeader[j]] = {};
             o[finalSelectHeader[j]]["type"] = "literal";
             o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
+            if (!isNaN(postgresArray[i][finalSelectHeader[j]])) {
+                o[finalSelectHeader[j]]["datatype"] = "http://www.w3.org/2001/XMLSchema#integer";
+            }
+            if (postgresArray[i][finalSelectHeader[j]].startsWith("Point(")) {
+                o[finalSelectHeader[j]]["datatype"] = "http://www.opengis.net/ont/geosparql#wktLiteral";
+            }
         }
         resArray.push(o);
     }
@@ -112,14 +132,24 @@ standardResponseJSON = function (finalSelectHeader, postgresArray) {
     return replyObj;
 }
 
-joinAndResult = function (client, tableList, finalSelectHeader, done) {
+joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, finalCount, done) {
     var commonVariable = "key"; //XXX
+    console.log(finalGroupBy)
 
-    var query = `
-       SELECT ${finalSelectHeader}
+
+    var query = `SELECT ${finalSelectHeader}`
+
+    if (finalCount !== undefined) query += `, COUNT(*) AS ${finalCount}`
+
+    query += `
        FROM "${tableList[0]}"
        INNER JOIN "${tableList[1]}" ON "${tableList[1]}".${commonVariable} = "${tableList[0]}".${commonVariable}
     `
+
+    var finalGroupByString = finalGroupBy.toString();
+    if (finalGroupBy.length > 0) {
+        query += `GROUP BY ${finalGroupByString}`
+    }
 
     console.log(query);
 
@@ -127,6 +157,7 @@ joinAndResult = function (client, tableList, finalSelectHeader, done) {
         done(dbres);
     }).catch(error => {
         console.error(error);
+        done(false);
     })
 }
 
@@ -137,9 +168,28 @@ exports.main = function (serviceQuery, reply) {
         }
 
         var finalSelectHeader = [];
-        var parsedQuery = parser.parse(serviceQuery);
+        var parsedQuery;
+        var finalGroupBy = [];
+        var finalCount;
+
+        try {
+            parsedQuery = parser.parse(serviceQuery);
+            console.log(parsedQuery)
+        } catch (e) {
+            console.error(e);
+            reply(false);
+            return;
+        }
+
         for (var i = 0; i < parsedQuery.variables.length; i++) {
-            finalSelectHeader.push(parsedQuery.variables[i].replace("?",""));
+            if (typeof parsedQuery.variables[i] === 'string') {
+                finalSelectHeader.push(parsedQuery.variables[i].replace("?",""));
+            } else if (parsedQuery.variables[i].expression.aggregation === "count") {
+                finalCount = parsedQuery.variables[i].variable.replace("?","");
+            }
+        }
+        for (var i = 0; i < parsedQuery.group.length; i++) {
+            finalGroupBy.push(parsedQuery.group[i].expression.replace("?",""));
         }
 
         var c = 0;
@@ -148,13 +198,18 @@ exports.main = function (serviceQuery, reply) {
             var e = parsedQuery.where[i].name;
             var q = generator.stringify(parsedQuery.where[i]);
             singleQueryRun(client, q, e, function (table) {
+                if (!table) {
+                    reply(false);
+                    return;
+                }
+
                 allTable.push(table);
                 if (++c === parsedQuery.where.length) {
                     for (var j = 0; j < allTable.length; j++) {
                         fs.unlinkSync(allTable[j]);
                     }
-                    joinAndResult(client, allTable, finalSelectHeader, function (res) {
-                        reply(standardResponseJSON(finalSelectHeader, res));
+                    joinAndResult(client, allTable, finalSelectHeader, finalGroupBy, finalCount, function (res) {
+                        reply(standardResponseJSON(res));
 
                         var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
                         console.log(deleteQuery);
@@ -162,6 +217,8 @@ exports.main = function (serviceQuery, reply) {
                             done();
                         }).catch(error => {
                             console.error(error);
+                            reply(false);
+                            return;
                         })
                     });
                 }

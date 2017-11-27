@@ -8,7 +8,12 @@ app.use(morgan('common'));
 
 app.get('/sparql', cors(), function (request, response) {
     balrog.main(request.query.query, function (result) {
-        response.send(result);
+        if (!result) {
+            response.status(500).send('Something broke!');
+            console.log("55")
+        } else {
+            response.send(result);
+        }
     });
 });
 
