@@ -132,10 +132,8 @@ standardResponseJSON = function (postgresArray) {
     return replyObj;
 }
 
-joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, finalCount, done) {
+joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, finalCount, finalHaving, done) {
     var commonVariable = "key"; //XXX
-    console.log(finalGroupBy)
-
 
     var query = `SELECT ${finalSelectHeader}`
 
@@ -148,7 +146,12 @@ joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, fi
 
     var finalGroupByString = finalGroupBy.toString();
     if (finalGroupBy.length > 0) {
-        query += `GROUP BY ${finalGroupByString}`
+        query += `GROUP BY ${finalGroupByString}`;
+    }
+
+    if (finalHaving !== undefined) {
+        query += `
+        HAVING ${finalHaving}`;
     }
 
     console.log(query);
@@ -171,10 +174,10 @@ exports.main = function (serviceQuery, reply) {
         var parsedQuery;
         var finalGroupBy = [];
         var finalCount;
+        var finalHaving;
 
         try {
             parsedQuery = parser.parse(serviceQuery);
-            console.log(parsedQuery)
         } catch (e) {
             console.error(e);
             reply(false);
@@ -191,6 +194,13 @@ exports.main = function (serviceQuery, reply) {
         for (var i = 0; i < parsedQuery.group.length; i++) {
             finalGroupBy.push(parsedQuery.group[i].expression.replace("?",""));
         }
+        if (parsedQuery.having !== undefined) {
+            parsedQuery.having[0].args
+            finalHaving = parsedQuery.having[0].args[0].aggregation + "(" + parsedQuery.having[0].args[0].expression + ") "
+                          + parsedQuery.having[0].operator + " " + parsedQuery.having[0].args[1].replace('"','').replace('"^^http://www.w3.org/2001/XMLSchema#integer','');
+        }
+
+        console.log(finalHaving)
 
         var c = 0;
         var allTable = [];
@@ -208,7 +218,7 @@ exports.main = function (serviceQuery, reply) {
                     for (var j = 0; j < allTable.length; j++) {
                         fs.unlinkSync(allTable[j]);
                     }
-                    joinAndResult(client, allTable, finalSelectHeader, finalGroupBy, finalCount, function (res) {
+                    joinAndResult(client, allTable, finalSelectHeader, finalGroupBy, finalCount, finalHaving, function (res) {
                         reply(standardResponseJSON(res));
 
                         var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
