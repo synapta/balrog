@@ -5,7 +5,9 @@ var parser = new SparqlParser();
 var SparqlGenerator = require('sparqljs').Generator;
 var generator = new SparqlGenerator();
 var request = require('request');
-var copyFrom = require('pg-copy-streams').from;
+var utils = require('./utils')
+
+var currentID;
 
 const config = {
     user: 'postgres',
@@ -17,44 +19,62 @@ const config = {
 const pool = new pg.Pool(config);
 
 
-queryPostgres = function (client, query) {
-    return new Promise((resolve, reject) => {
-        client.query(query, function (err, result) {
-            if (err) {
-                return reject(err);
-            }
-            return resolve(result.rows);
-        });
-    });
+checkQueryPattern = function (query) {
+    if (query.where === undefined) return false;
+
+    for (var i = 0; i < query.where.length; i++) {
+        if (query.where[i].type !== "service") return false;
+    }
+
+    return true;
 }
 
-csvToPostgres = function (client, tableName, fileName) {
+requestSPARQL = function (endpoint, query, mode) {
     return new Promise((resolve, reject) => {
-        console.log("Loading... (" + tableName +")");
-        var stream = client.query(copyFrom('COPY "' + tableName +'" FROM STDIN WITH CSV HEADER'));
-        var fileStream = fs.createReadStream("./" + fileName);
-        fileStream.on('error', function(error) { reject('Error:', error.message) });
-        fileStream.pipe(stream)
-            .on('finish', resolve())
-            .on('error', function(error) { reject('Error:', error.message) });
-    });
-}
+        console.log("[" + currentID + "] Requesting data... (" + endpoint +") mode " + mode);
 
-requestSPARQL = function (endpoint, query) {
-    return new Promise((resolve, reject) => {
-        console.log("Requesting... (" + endpoint +")");
+        var url = endpoint + "?query=" + encodeURIComponent(query);
+        var accept = "application/json";
+
+        /* Mode needed for get more endpoints work. Maybe the right mode for an
+           endpoint can be saved to save time in future and to collect an
+           interesting DB */
+        if (mode === 1) url += "&format=json";
+        if (mode === 2) accept = "text/csv";
+        if (mode === 3) url += "&format=csv";
+
         request({
             headers: {
-              'Accept': "text/csv"
+              'Accept': accept
             },
             method: 'GET',
-            url: endpoint + "?query=" + encodeURIComponent(query) /*+ "&format=csv"*/,
+            url: url
         }, function (error, response, body) {
             if (error) {
                 return reject(error);
             }
-            console.log("Done! (" + endpoint +")");
-            return resolve(body);
+            console.log("[" + currentID + "] Data arrived! (" + endpoint +")");
+            try {
+                var result = {};
+
+                if (mode === 0 || mode === 1) {
+                    result.body = JSON.parse(body);
+                    result.type = "json";
+                } else if (mode === 2 || mode === 3) {
+                    //TODO test if body its a valid CSV
+                    result.body = body;
+                    result.type = "csv";
+                }
+                return resolve(result);
+            } catch (e) {
+                if (mode < 3) {
+                    requestSPARQL(endpoint, query, ++mode).then(result => {
+                        return resolve(result);
+                    })
+                } else {
+                    return reject("Unable to get valid data from " + endpoint);
+                }
+            }
         });
     });
 }
@@ -69,8 +89,23 @@ createTableQuery = function (tableName, headArray) {
     return `CREATE TABLE "${tableName}" (${params});`;
 }
 
+/* field, type, datatype
+   test, literal, http://... */
+insertDataTypeQuery = function (tableName, dataTypeObject) {
+    var query = "";
+    for (var i = 0; i < dataTypeObject.length; i++) {
+        query += `INSERT INTO "${tableName}" (field, type, datatype) VALUES ('${dataTypeObject[i].field}', '${dataTypeObject[i].type}', '${dataTypeObject[i].datatype}'); `;
+    }
+
+    console.log(query)
+
+    return query;
+}
+
+var dataTypeObject = []; //XXX better scope!!!
+
 singleQueryRun = function (client, query, endpoint, done) {
-    console.log("Asking " + endpoint + " for " + query);
+    console.log("[" + currentID + "] ASK " + endpoint + "\n" + query);
     var q;
 
     try {
@@ -86,14 +121,57 @@ singleQueryRun = function (client, query, endpoint, done) {
     }
 
     var randomName = new Date().toISOString();
-    console.log(createTableQuery(randomName, header))
-    queryPostgres(client, createTableQuery(randomName, header)).then(dbres => {
-        return requestSPARQL(endpoint, query);
-    }).then(csv => {
-        fs.writeFileSync(randomName, csv);
-        return csvToPostgres(client, randomName, randomName);
+    var currentTableCreate = createTableQuery(randomName, header);
+    console.log("[" + currentID + "] " + currentTableCreate)
+
+    utils.queryPostgres(client, currentTableCreate).then(dbres => {
+        return requestSPARQL(endpoint, query, 0);
+    }).then(sparqlResult => {
+        /* JSON */
+        if (sparqlResult.type = "json") {
+            fs.writeFileSync(randomName, header.toString() + "\n");
+            var dataVector = sparqlResult.body.results.bindings;
+            for (var i = 0; i < dataVector.length; i++) {
+                var line = [];
+                for (var j = 0; j < header.length; j++) {
+                    line.push(dataVector[i][header[j]].value);
+                }
+                fs.appendFileSync(randomName, line.toString() + "\n");
+            }
+
+            for (var key in dataVector[0]) {
+                var o = {};
+                o.field = key;
+                o.type = dataVector[0][key].type || null;
+                o.datatype = dataVector[0][key].datatype || null;
+                dataTypeObject.push(o);
+            }
+
+        /* CSV */
+        } else if (sparqlResult.type = "csv") {
+            fs.writeFileSync(randomName, sparqlResult.body);
+
+            for (var i = 0; i < header.length; i++) {
+                var o = {};
+                o.field = header[i];
+                o.type = "literal";
+                o.datatype = null;
+                dataTypeObject.push(o);
+            }
+        }
+
+        var currentTableTypeCreate = createTableQuery(randomName + "_type", "field,type,datatype".split(","));
+        console.log("[" + currentID + "] " + currentTableTypeCreate);
+
+        return utils.queryPostgres(client, currentTableTypeCreate)
+    }).then(dbres => {
+        console.log("[" + currentID + "] Loading datatypes... (" + randomName +")");
+        return utils.queryPostgres(client, insertDataTypeQuery(randomName + "_type", dataTypeObject));
+    }).then(dbres => {
+        console.log("[" + currentID + "] Loading data... (" + randomName +")");
+        return utils.csvToPostgres(client, randomName, randomName);
     }).then(function () {
-        console.log("Finish!");
+        console.log("[" + currentID + "] Finish! (" + endpoint + ")");
         done(randomName);
     }).catch(error => {
         console.error(error);
@@ -114,6 +192,8 @@ standardResponseJSON = function (postgresArray) {
             o[finalSelectHeader[j]] = {};
             o[finalSelectHeader[j]]["type"] = "literal";
             o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
+
+            //XXX non così, meglio salvarlo nel db
             if (!isNaN(postgresArray[i][finalSelectHeader[j]])) {
                 o[finalSelectHeader[j]]["datatype"] = "http://www.w3.org/2001/XMLSchema#integer";
             }
@@ -140,8 +220,8 @@ joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, fi
     if (finalCount !== undefined) query += `, COUNT(*) AS ${finalCount}`
 
     query += `
-       FROM "${tableList[0]}"
-       INNER JOIN "${tableList[1]}" ON "${tableList[1]}".${commonVariable} = "${tableList[0]}".${commonVariable}
+    FROM "${tableList[0]}"
+    INNER JOIN "${tableList[1]}" ON "${tableList[1]}".${commonVariable} = "${tableList[0]}".${commonVariable}
     `
 
     var finalGroupByString = finalGroupBy.toString();
@@ -154,9 +234,9 @@ joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, fi
         HAVING ${finalHaving}`;
     }
 
-    console.log(query);
+    console.log("[" + currentID + "] JOIN\n" + query);
 
-    queryPostgres(client, query).then(dbres => {
+    utils.queryPostgres(client, query).then(dbres => {
         done(dbres);
     }).catch(error => {
         console.error(error);
@@ -164,10 +244,14 @@ joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, fi
     })
 }
 
-exports.main = function (serviceQuery, reply) {
+exports.main = function (serviceQuery, sessionID, reply) {
+    currentID = sessionID;
+    console.log("[" + currentID + "] GOT A NEW QUERY TO DELVE\n" + serviceQuery);
     pool.connect(function (err, client, done) {
         if (err) {
-            console.log("Error in connecting with Postgres" + err);
+            console.log("[" + currentID + "] Error in connecting with Postgres" + err);
+            reply(false);
+            return;
         }
 
         var finalSelectHeader = [];
@@ -184,6 +268,12 @@ exports.main = function (serviceQuery, reply) {
             return;
         }
 
+        if (parsedQuery.type !== "query" || !checkQueryPattern(parsedQuery)) {
+            console.error("[" + currentID + "] Not a valid pattern!");
+            reply(false);
+            return;
+        }
+
         for (var i = 0; i < parsedQuery.variables.length; i++) {
             if (typeof parsedQuery.variables[i] === 'string') {
                 finalSelectHeader.push(parsedQuery.variables[i].replace("?",""));
@@ -191,16 +281,16 @@ exports.main = function (serviceQuery, reply) {
                 finalCount = parsedQuery.variables[i].variable.replace("?","");
             }
         }
-        for (var i = 0; i < parsedQuery.group.length; i++) {
-            finalGroupBy.push(parsedQuery.group[i].expression.replace("?",""));
+        if (parsedQuery.group !== undefined) {
+            for (var i = 0; i < parsedQuery.group.length; i++) {
+                finalGroupBy.push(parsedQuery.group[i].expression.replace("?",""));
+            }
         }
         if (parsedQuery.having !== undefined) {
             parsedQuery.having[0].args
             finalHaving = parsedQuery.having[0].args[0].aggregation + "(" + parsedQuery.having[0].args[0].expression + ") "
                           + parsedQuery.having[0].operator + " " + parsedQuery.having[0].args[1].replace('"','').replace('"^^http://www.w3.org/2001/XMLSchema#integer','');
         }
-
-        console.log(finalHaving)
 
         var c = 0;
         var allTable = [];
@@ -222,8 +312,8 @@ exports.main = function (serviceQuery, reply) {
                         reply(standardResponseJSON(res));
 
                         var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
-                        console.log(deleteQuery);
-                        queryPostgres(client, deleteQuery).then(dbres => {
+                        console.log("[" + currentID + "]" + deleteQuery);
+                        utils.queryPostgres(client, deleteQuery).then(dbres => {
                             done();
                         }).catch(error => {
                             console.error(error);
