@@ -12,7 +12,6 @@ app.get('/sparql', cors(), function (request, response) {
     balrog.main(request.query.query, requestID, function (result) {
         if (!result) {
             response.status(500).send('Something broke!');
-            console.log("55")
         } else {
             response.send(result);
         }

@@ -136,18 +136,23 @@ singleQueryRun = function (client, query, endpoint) {
                 for (var i = 0; i < dataVector.length; i++) {
                     var line = [];
                     for (var j = 0; j < header.length; j++) {
-                        line.push(dataVector[i][header[j]].value);
+                        if (dataVector[i][header[j]] !== undefined) {
+                            line.push(dataVector[i][header[j]].value);
+                        } else {
+                            line.push("null");
+                        }
                     }
                     var quotedAndCommaSeparated = '"' + line.join('","') + '"';
                     fs.appendFileSync(randomName, quotedAndCommaSeparated + "\n");
                 }
 
-                for (var key in dataVector[0]) {
+                var vars = sparqlResult.body.head.vars;
+                for (var k in vars) {
                     var o = {};
-                    o.field = key;
+                    o.field = vars[k];
                     o.database = randomName;
-                    o.type = dataVector[0][key].type || null;
-                    o.datatype = dataVector[0][key].datatype || null;
+                    o.type = utils.findElementJsonArrayByKey(dataVector, vars[k]).type;
+                    o.datatype = utils.findElementJsonArrayByKey(dataVector, vars[k]).datatype;
                     dataTypeObject.push(o);
                 }
 
@@ -199,12 +204,14 @@ standardResponseJSON = function (client, tableList, postgresArray) {
             for (var i = 0; i < postgresArray.length; i++) {
                 var o = {};
                 for (var j = 0; j < finalSelectHeader.length; j++) {
+                    if (postgresArray[i][finalSelectHeader[j]] === "null") continue;
+
                     o[finalSelectHeader[j]] = {};
                     o[finalSelectHeader[j]]["datatype"] = utils.findElementJsonArray(dbres, "field", finalSelectHeader[j])["datatype"];
                     o[finalSelectHeader[j]]["type"] = utils.findElementJsonArray(dbres, "field", finalSelectHeader[j])["type"];
                     o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
 
-                    if (o[finalSelectHeader[j]]["datatype"] === "null") delete o[finalSelectHeader[j]]["datatype"];
+                    if (o[finalSelectHeader[j]]["datatype"] === "undefined") delete o[finalSelectHeader[j]]["datatype"];
                 }
                 resArray.push(o);
             }
@@ -329,6 +336,7 @@ exports.main = function (serviceQuery, sessionID, reply) {
                     }).then(res => {
                         reply(res);
 
+                        allTable.splice(allTable.indexOf(currentID), 1);
                         var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
                         console.log("[" + currentID + "] " + deleteQuery);
 

@@ -28,3 +28,10 @@ exports.findElementJsonArray = function (arr, propName, propValue) {
       if (arr[i][propName] == propValue)
           return arr[i];
 }
+
+exports.findElementJsonArrayByKey = function (arr, key) {
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i][key] !== undefined)
+          return arr[i][key];
+    }
+}
