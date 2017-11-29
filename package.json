@@ -1,0 +1,28 @@
+{
+  "name": "balrog",
+  "description": "SPARQL federated query for real.",
+  "main": "server.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/synapta/balrog.git"
+  },
+  "keywords": [
+    "sparql"
+  ],
+  "author": "Alessio Melandri",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/synapta/balrog/issues"
+  },
+  "homepage": "https://github.com/synapta/balrog#readme",
+  "dependencies": {
+    "cors": "latest",
+    "express": "latest",
+    "morgan": "latest",
+    "node-uuid": "latest",
+    "pg": "latest",
+    "pg-copy-streams": "latest",
+    "request": "latest",
+    "sparqljs": "latest"
+  }
+}

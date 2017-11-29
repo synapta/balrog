@@ -82,7 +82,7 @@ requestSPARQL = function (endpoint, query, mode) {
 createTableQuery = function (tableName, headArray) {
     var params = "";
     for (var i = 0; i < headArray.length; i++) {
-        params += headArray[i] + " varchar,";
+        params += "\"" + headArray[i] + "\" varchar,";
     }
     params = params.slice(0, -1);
 
@@ -225,7 +225,8 @@ joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, fi
     return new Promise((resolve, reject) => {
         var commonVariable = "key"; //XXX
 
-        var query = `SELECT ${finalSelectHeader}`
+        var finalSelectHeaderString = '"' + finalSelectHeader.join('","') + '"';
+        var query = `SELECT ${finalSelectHeaderString}`
 
         if (finalCount !== undefined) query += `, COUNT(*) AS ${finalCount}`
 
@@ -234,7 +235,7 @@ joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, fi
         INNER JOIN "${tableList[1]}" ON "${tableList[1]}".${commonVariable} = "${tableList[0]}".${commonVariable}
         `
 
-        var finalGroupByString = finalGroupBy.toString();
+        var finalGroupByString = '"' + finalGroupBy.join('","') + '"';
         if (finalGroupBy.length > 0) {
             query += `GROUP BY ${finalGroupByString}`;
         }
