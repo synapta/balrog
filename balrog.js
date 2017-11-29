@@ -142,7 +142,6 @@ singleQueryRun = function (client, query, endpoint) {
                     fs.appendFileSync(randomName, quotedAndCommaSeparated + "\n");
                 }
 
-                dataTypeObject = [];
                 for (var key in dataVector[0]) {
                     var o = {};
                     o.field = key;
@@ -191,6 +190,7 @@ standardResponseJSON = function (client, tableList, postgresArray) {
             finalSelectHeader.push(j);
         }
 
+        tableList.push(currentID);
         var dbList = "'" + tableList.join("','") + "'";
         var getTypesQuery = `SELECT * FROM type WHERE database IN (${dbList})`;
         console.log("[" + currentID + "] " + getTypesQuery);
@@ -204,7 +204,7 @@ standardResponseJSON = function (client, tableList, postgresArray) {
                     o[finalSelectHeader[j]]["type"] = utils.findElementJsonArray(dbres, "field", finalSelectHeader[j])["type"];
                     o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
 
-                    if (o[finalSelectHeader[j]]["datatype"] === "null") delete o[finalSelectHeader[j]]["datatype"]; 
+                    if (o[finalSelectHeader[j]]["datatype"] === "null") delete o[finalSelectHeader[j]]["datatype"];
                 }
                 resArray.push(o);
             }
@@ -290,6 +290,12 @@ exports.main = function (serviceQuery, sessionID, reply) {
                 finalSelectHeader.push(parsedQuery.variables[i].replace("?",""));
             } else if (parsedQuery.variables[i].expression.aggregation === "count") {
                 finalCount = parsedQuery.variables[i].variable.replace("?","");
+                var o = {};
+                o.field = finalCount;
+                o.database = currentID;
+                o.type = "literal";
+                o.datatype = "http://www.w3.org/2001/XMLSchema#integer";
+                dataTypeObject.push(o);
             }
         }
         if (parsedQuery.group !== undefined) {
@@ -329,8 +335,8 @@ exports.main = function (serviceQuery, sessionID, reply) {
                     }).then(dbres => {
                         console.log("[" + currentID + "] CLOSE POOL CONNECTION");
                         done();
-                    }).catch(error => {
-                        console.error("[" + currentID + "] " + error);
+                    }).catch(err => {
+                        console.error("[" + currentID + "] " + err);
                         reply(false);
                         return;
                     })
