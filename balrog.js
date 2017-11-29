@@ -136,7 +136,7 @@ singleQueryRun = function (client, query, endpoint) {
                     for (var j = 0; j < header.length; j++) {
                         line.push(dataVector[i][header[j]].value);
                     }
-                    var quotedAndCommaSeparated = "'" + line.join("','") + "'";
+                    var quotedAndCommaSeparated = '"' + line.join('","') + '"';
                     fs.appendFileSync(randomName, quotedAndCommaSeparated + "\n");
                 }
 

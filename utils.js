@@ -14,7 +14,7 @@ exports.queryPostgres = function (client, query) {
 
 exports.csvToPostgres = function (client, tableName, fileName) {
     return new Promise((resolve, reject) => {
-        var stream = client.query(copyFrom('COPY "' + tableName +'" FROM STDIN WITH CSV HEADER'));
+        var stream = client.query(copyFrom('COPY "' + tableName +'" FROM STDIN WITH CSV HEADER ESCAPE\'\\\''));
         var fileStream = fs.createReadStream("./" + fileName);
         fileStream.on('error', function(error) { reject('Error:', error.message) });
         fileStream.pipe(stream)
