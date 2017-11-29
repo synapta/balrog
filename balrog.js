@@ -104,144 +104,149 @@ insertDataTypeQuery = function (tableName, dataTypeObject) {
 
 var dataTypeObject = []; //XXX better scope!!!
 
-singleQueryRun = function (client, query, endpoint, done) {
-    console.log("[" + currentID + "] ASK " + endpoint + "\n" + query);
-    var q;
+singleQueryRun = function (client, query, endpoint) {
+    return new Promise((resolve, reject) => {
+        console.log("[" + currentID + "] ASK " + endpoint + "\n" + query);
+        var q;
 
-    try {
-        q = parser.parse(query);
-    } catch (e) {
-        console.error(e);
-        done(false);
-    }
-
-    var header = [];
-    for (var i = 0; i < q.variables.length; i++) {
-        header.push(q.variables[i].replace("?",""));
-    }
-
-    var randomName = new Date().toISOString();
-    var currentTableCreate = createTableQuery(randomName, header);
-    console.log("[" + currentID + "] " + currentTableCreate)
-
-    utils.queryPostgres(client, currentTableCreate).then(dbres => {
-        return requestSPARQL(endpoint, query, 0);
-    }).then(sparqlResult => {
-        /* JSON */
-        if (sparqlResult.type = "json") {
-            fs.writeFileSync(randomName, header.toString() + "\n");
-            var dataVector = sparqlResult.body.results.bindings;
-            for (var i = 0; i < dataVector.length; i++) {
-                var line = [];
-                for (var j = 0; j < header.length; j++) {
-                    line.push(dataVector[i][header[j]].value);
-                }
-                fs.appendFileSync(randomName, line.toString() + "\n");
-            }
-
-            for (var key in dataVector[0]) {
-                var o = {};
-                o.field = key;
-                o.type = dataVector[0][key].type || null;
-                o.datatype = dataVector[0][key].datatype || null;
-                dataTypeObject.push(o);
-            }
-
-        /* CSV */
-        } else if (sparqlResult.type = "csv") {
-            fs.writeFileSync(randomName, sparqlResult.body);
-
-            for (var i = 0; i < header.length; i++) {
-                var o = {};
-                o.field = header[i];
-                o.type = "literal";
-                o.datatype = null;
-                dataTypeObject.push(o);
-            }
+        try {
+            q = parser.parse(query);
+        } catch (e) {
+            reject(e);
         }
 
-        var currentTableTypeCreate = createTableQuery(randomName + "_type", "field,type,datatype".split(","));
-        console.log("[" + currentID + "] " + currentTableTypeCreate);
+        var header = [];
+        for (var i = 0; i < q.variables.length; i++) {
+            header.push(q.variables[i].replace("?",""));
+        }
 
-        return utils.queryPostgres(client, currentTableTypeCreate)
-    }).then(dbres => {
-        console.log("[" + currentID + "] Loading datatypes... (" + randomName +")");
-        return utils.queryPostgres(client, insertDataTypeQuery(randomName + "_type", dataTypeObject));
-    }).then(dbres => {
-        console.log("[" + currentID + "] Loading data... (" + randomName +")");
-        return utils.csvToPostgres(client, randomName, randomName);
-    }).then(function () {
-        console.log("[" + currentID + "] Finish! (" + endpoint + ")");
-        done(randomName);
-    }).catch(error => {
-        console.error(error);
-        done(false);
-    })
+        var randomName = new Date().toISOString();
+        var currentTableCreate = createTableQuery(randomName, header);
+        console.log("[" + currentID + "] " + currentTableCreate)
+
+        utils.queryPostgres(client, currentTableCreate).then(dbres => {
+            return requestSPARQL(endpoint, query, 0);
+        }).then(sparqlResult => {
+            /* JSON */
+            if (sparqlResult.type = "json") {
+                fs.writeFileSync(randomName, header.toString() + "\n");
+                var dataVector = sparqlResult.body.results.bindings;
+                for (var i = 0; i < dataVector.length; i++) {
+                    var line = [];
+                    for (var j = 0; j < header.length; j++) {
+                        line.push(dataVector[i][header[j]].value);
+                    }
+                    var quotedAndCommaSeparated = "'" + line.join("','") + "'";
+                    fs.appendFileSync(randomName, quotedAndCommaSeparated + "\n");
+                }
+
+                dataTypeObject = [];
+                for (var key in dataVector[0]) {
+                    var o = {};
+                    o.field = key;
+                    o.type = dataVector[0][key].type || null;
+                    o.datatype = dataVector[0][key].datatype || null;
+                    dataTypeObject.push(o);
+                }
+
+            /* CSV */
+            } else if (sparqlResult.type = "csv") {
+                fs.writeFileSync(randomName, sparqlResult.body);
+
+                for (var i = 0; i < header.length; i++) {
+                    var o = {};
+                    o.field = header[i];
+                    o.type = "literal";
+                    o.datatype = null;
+                    dataTypeObject.push(o);
+                }
+            }
+
+            var currentTableTypeCreate = createTableQuery(randomName + "_type", "field,type,datatype".split(","));
+            console.log("[" + currentID + "] " + currentTableTypeCreate);
+
+            return utils.queryPostgres(client, currentTableTypeCreate)
+        }).then(dbres => {
+            console.log("[" + currentID + "] Loading datatypes... (" + randomName +")");
+            return utils.queryPostgres(client, insertDataTypeQuery(randomName + "_type", dataTypeObject));
+        }).then(dbres => {
+            console.log("[" + currentID + "] Loading data... (" + randomName +")");
+            return utils.csvToPostgres(client, randomName, randomName);
+        }).then(function () {
+            console.log("[" + currentID + "] Finish! (" + endpoint + ")");
+            resolve(randomName);
+        }).catch(error => {
+            reject(error);
+        });
+    });
 }
 
 standardResponseJSON = function (postgresArray) {
-    var finalSelectHeader = [];
-    for (var j in postgresArray[0]) {
-        finalSelectHeader.push(j);
-    }
-
-    var resArray = [];
-    for (var i = 0; i < postgresArray.length; i++) {
-        var o = {};
-        for (var j = 0; j < finalSelectHeader.length; j++) {
-            o[finalSelectHeader[j]] = {};
-            o[finalSelectHeader[j]]["type"] = "literal";
-            o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
-
-            //XXX non così, meglio salvarlo nel db
-            if (!isNaN(postgresArray[i][finalSelectHeader[j]])) {
-                o[finalSelectHeader[j]]["datatype"] = "http://www.w3.org/2001/XMLSchema#integer";
-            }
-            if (postgresArray[i][finalSelectHeader[j]].startsWith("Point(")) {
-                o[finalSelectHeader[j]]["datatype"] = "http://www.opengis.net/ont/geosparql#wktLiteral";
-            }
+    //return new Promise((resolve, reject) => {
+        var finalSelectHeader = [];
+        for (var j in postgresArray[0]) {
+            finalSelectHeader.push(j);
         }
-        resArray.push(o);
-    }
-    var replyObj = {};
-    replyObj.head = {};
-    replyObj.head.vars = finalSelectHeader;
-    replyObj.results = {};
-    replyObj.results.bindings = resArray;
 
-    return replyObj;
+        var resArray = [];
+        for (var i = 0; i < postgresArray.length; i++) {
+            var o = {};
+            for (var j = 0; j < finalSelectHeader.length; j++) {
+                o[finalSelectHeader[j]] = {};
+                o[finalSelectHeader[j]]["type"] = "literal";
+                o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
+
+                //XXX non così, meglio salvarlo nel db
+                if (!isNaN(postgresArray[i][finalSelectHeader[j]])) {
+                    o[finalSelectHeader[j]]["datatype"] = "http://www.w3.org/2001/XMLSchema#integer";
+                }
+                if (postgresArray[i][finalSelectHeader[j]].startsWith("Point(")) {
+                    o[finalSelectHeader[j]]["datatype"] = "http://www.opengis.net/ont/geosparql#wktLiteral";
+                }
+            }
+            resArray.push(o);
+        }
+        var replyObj = {};
+        replyObj.head = {};
+        replyObj.head.vars = finalSelectHeader;
+        replyObj.results = {};
+        replyObj.results.bindings = resArray;
+
+        return replyObj;
+    //});
 }
 
 joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, finalCount, finalHaving, done) {
-    var commonVariable = "key"; //XXX
+    return new Promise((resolve, reject) => {
+        var commonVariable = "key"; //XXX
 
-    var query = `SELECT ${finalSelectHeader}`
+        var query = `SELECT ${finalSelectHeader}`
 
-    if (finalCount !== undefined) query += `, COUNT(*) AS ${finalCount}`
+        if (finalCount !== undefined) query += `, COUNT(*) AS ${finalCount}`
 
-    query += `
-    FROM "${tableList[0]}"
-    INNER JOIN "${tableList[1]}" ON "${tableList[1]}".${commonVariable} = "${tableList[0]}".${commonVariable}
-    `
-
-    var finalGroupByString = finalGroupBy.toString();
-    if (finalGroupBy.length > 0) {
-        query += `GROUP BY ${finalGroupByString}`;
-    }
-
-    if (finalHaving !== undefined) {
         query += `
-        HAVING ${finalHaving}`;
-    }
+        FROM "${tableList[0]}"
+        INNER JOIN "${tableList[1]}" ON "${tableList[1]}".${commonVariable} = "${tableList[0]}".${commonVariable}
+        `
 
-    console.log("[" + currentID + "] JOIN\n" + query);
+        var finalGroupByString = finalGroupBy.toString();
+        if (finalGroupBy.length > 0) {
+            query += `GROUP BY ${finalGroupByString}`;
+        }
 
-    utils.queryPostgres(client, query).then(dbres => {
-        done(dbres);
-    }).catch(error => {
-        console.error(error);
-        done(false);
-    })
+        if (finalHaving !== undefined) {
+            query += `
+            HAVING ${finalHaving}`;
+        }
+
+        console.log("[" + currentID + "] JOIN\n" + query);
+
+        utils.queryPostgres(client, query).then(dbres => {
+            resolve(dbres);
+        }).catch(error => {
+            reject(error);
+        })
+    });
 }
 
 exports.main = function (serviceQuery, sessionID, reply) {
@@ -297,32 +302,35 @@ exports.main = function (serviceQuery, sessionID, reply) {
         for (var i = 0; i < parsedQuery.where.length; i++) {
             var e = parsedQuery.where[i].name;
             var q = generator.stringify(parsedQuery.where[i]);
-            singleQueryRun(client, q, e, function (table) {
-                if (!table) {
-                    reply(false);
-                    return;
-                }
-
+            singleQueryRun(client, q, e).then(table => {
                 allTable.push(table);
+
+                /* if its my last call for this query */
                 if (++c === parsedQuery.where.length) {
                     for (var j = 0; j < allTable.length; j++) {
                         fs.unlinkSync(allTable[j]);
                     }
-                    joinAndResult(client, allTable, finalSelectHeader, finalGroupBy, finalCount, finalHaving, function (res) {
-                        reply(standardResponseJSON(res));
-
-                        var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
-                        console.log("[" + currentID + "]" + deleteQuery);
-                        utils.queryPostgres(client, deleteQuery).then(dbres => {
-                            done();
-                        }).catch(error => {
-                            console.error(error);
-                            reply(false);
-                            return;
-                        })
-                    });
+                    return joinAndResult(client, allTable, finalSelectHeader, finalGroupBy, finalCount, finalHaving);
                 }
-            });
+            }).then(res => {
+                if (res !== undefined) { //XXX
+                    reply(standardResponseJSON(res));
+
+                    var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
+                    console.log("[" + currentID + "]" + deleteQuery);
+                    utils.queryPostgres(client, deleteQuery).then(dbres => {
+                        done();
+                    }).catch(error => {
+                        console.error(error);
+                        reply(false);
+                        return;
+                    })
+                }
+            }).catch(error => {
+                console.error("[" + currentID + "] " + error);
+                reply(false);
+                return;
+            })
         }
 
     });

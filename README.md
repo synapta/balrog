@@ -10,7 +10,11 @@ I'm still very experimental!!!
 - No others operands in the first level except for SERVICE
 - No operands in the most external `SELECT` except `COUNT`
 - Returns always literal (even if URI)
-- Crash if one of the prefixes is missing
+
+## Feature request
+- Better error comunication to the user
+- Automatically pagination (Virtuoso endpoints have limits e.g. 10k lines)
+- Smart `VALUES` usage for reduce complex queries and avoid timeouts
 
 ## Example working query
 ```
