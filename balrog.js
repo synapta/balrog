@@ -86,7 +86,7 @@ createTableQuery = function (tableName, headArray) {
     }
     params = params.slice(0, -1);
 
-    return `CREATE TABLE "${tableName}" (${params});`;
+    return `CREATE TABLE IF NOT EXISTS "${tableName}" (${params});`;
 }
 
 /* field, type, datatype
@@ -94,13 +94,15 @@ createTableQuery = function (tableName, headArray) {
 insertDataTypeQuery = function (tableName, dataTypeObject) {
     var query = "";
     for (var i = 0; i < dataTypeObject.length; i++) {
-        query += `INSERT INTO "${tableName}" (field, type, datatype) VALUES ('${dataTypeObject[i].field}', '${dataTypeObject[i].type}', '${dataTypeObject[i].datatype}'); `;
+        query += `INSERT INTO "${tableName}" (field, database, type, datatype)
+          VALUES ('${dataTypeObject[i].field}', '${dataTypeObject[i].database}', '${dataTypeObject[i].type}', '${dataTypeObject[i].datatype}'); `;
     }
 
     console.log(query)
 
     return query;
 }
+
 
 var dataTypeObject = []; //XXX better scope!!!
 
@@ -144,6 +146,7 @@ singleQueryRun = function (client, query, endpoint) {
                 for (var key in dataVector[0]) {
                     var o = {};
                     o.field = key;
+                    o.database = randomName;
                     o.type = dataVector[0][key].type || null;
                     o.datatype = dataVector[0][key].datatype || null;
                     dataTypeObject.push(o);
@@ -162,13 +165,13 @@ singleQueryRun = function (client, query, endpoint) {
                 }
             }
 
-            var currentTableTypeCreate = createTableQuery(randomName + "_type", "field,type,datatype".split(","));
+            var currentTableTypeCreate = createTableQuery("type", "field,database,type,datatype".split(","));
             console.log("[" + currentID + "] " + currentTableTypeCreate);
 
             return utils.queryPostgres(client, currentTableTypeCreate)
         }).then(dbres => {
             console.log("[" + currentID + "] Loading datatypes... (" + randomName +")");
-            return utils.queryPostgres(client, insertDataTypeQuery(randomName + "_type", dataTypeObject));
+            return utils.queryPostgres(client, insertDataTypeQuery("type", dataTypeObject));
         }).then(dbres => {
             console.log("[" + currentID + "] Loading data... (" + randomName +")");
             return utils.csvToPostgres(client, randomName, randomName);
@@ -181,39 +184,41 @@ singleQueryRun = function (client, query, endpoint) {
     });
 }
 
-standardResponseJSON = function (postgresArray) {
-    //return new Promise((resolve, reject) => {
+standardResponseJSON = function (client, tableList, postgresArray) {
+    return new Promise((resolve, reject) => {
         var finalSelectHeader = [];
         for (var j in postgresArray[0]) {
             finalSelectHeader.push(j);
         }
 
-        var resArray = [];
-        for (var i = 0; i < postgresArray.length; i++) {
-            var o = {};
-            for (var j = 0; j < finalSelectHeader.length; j++) {
-                o[finalSelectHeader[j]] = {};
-                o[finalSelectHeader[j]]["type"] = "literal";
-                o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
+        var dbList = "'" + tableList.join("','") + "'";
+        var getTypesQuery = `SELECT * FROM type WHERE database IN (${dbList})`;
+        console.log("[" + currentID + "] " + getTypesQuery);
+        utils.queryPostgres(client, getTypesQuery).then(dbres => {
+            var resArray = [];
+            for (var i = 0; i < postgresArray.length; i++) {
+                var o = {};
+                for (var j = 0; j < finalSelectHeader.length; j++) {
+                    o[finalSelectHeader[j]] = {};
+                    o[finalSelectHeader[j]]["datatype"] = utils.findElementJsonArray(dbres, "field", finalSelectHeader[j])["datatype"];
+                    o[finalSelectHeader[j]]["type"] = utils.findElementJsonArray(dbres, "field", finalSelectHeader[j])["type"];
+                    o[finalSelectHeader[j]]["value"] = postgresArray[i][finalSelectHeader[j]];
 
-                //XXX non così, meglio salvarlo nel db
-                if (!isNaN(postgresArray[i][finalSelectHeader[j]])) {
-                    o[finalSelectHeader[j]]["datatype"] = "http://www.w3.org/2001/XMLSchema#integer";
+                    if (o[finalSelectHeader[j]]["datatype"] === "null") delete o[finalSelectHeader[j]]["datatype"]; 
                 }
-                if (postgresArray[i][finalSelectHeader[j]].startsWith("Point(")) {
-                    o[finalSelectHeader[j]]["datatype"] = "http://www.opengis.net/ont/geosparql#wktLiteral";
-                }
+                resArray.push(o);
             }
-            resArray.push(o);
-        }
-        var replyObj = {};
-        replyObj.head = {};
-        replyObj.head.vars = finalSelectHeader;
-        replyObj.results = {};
-        replyObj.results.bindings = resArray;
+            var replyObj = {};
+            replyObj.head = {};
+            replyObj.head.vars = finalSelectHeader;
+            replyObj.results = {};
+            replyObj.results.bindings = resArray;
 
-        return replyObj;
-    //});
+            resolve(replyObj);
+        }).catch(error => {
+            reject(error);
+        });
+    });
 }
 
 joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, finalCount, finalHaving, done) {
@@ -252,9 +257,10 @@ joinAndResult = function (client, tableList, finalSelectHeader, finalGroupBy, fi
 exports.main = function (serviceQuery, sessionID, reply) {
     currentID = sessionID;
     console.log("[" + currentID + "] GOT A NEW QUERY TO DELVE\n" + serviceQuery);
+    console.log("[" + currentID + "] OPEN POOL CONNECTION");
     pool.connect(function (err, client, done) {
         if (err) {
-            console.log("[" + currentID + "] Error in connecting with Postgres" + err);
+            console.log("[" + currentID + "] Error in connecting with Postgres\n" + err);
             reply(false);
             return;
         }
@@ -268,7 +274,7 @@ exports.main = function (serviceQuery, sessionID, reply) {
         try {
             parsedQuery = parser.parse(serviceQuery);
         } catch (e) {
-            console.error(e);
+            console.error("[" + currentID + "] Invalid query!\n" + e);
             reply(false);
             return;
         }
@@ -310,18 +316,21 @@ exports.main = function (serviceQuery, sessionID, reply) {
                     for (var j = 0; j < allTable.length; j++) {
                         fs.unlinkSync(allTable[j]);
                     }
-                    return joinAndResult(client, allTable, finalSelectHeader, finalGroupBy, finalCount, finalHaving);
-                }
-            }).then(res => {
-                if (res !== undefined) { //XXX
-                    reply(standardResponseJSON(res));
 
-                    var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
-                    console.log("[" + currentID + "]" + deleteQuery);
-                    utils.queryPostgres(client, deleteQuery).then(dbres => {
+                    joinAndResult(client, allTable, finalSelectHeader, finalGroupBy, finalCount, finalHaving).then(res => {
+                        return standardResponseJSON(client, allTable, res);
+                    }).then(res => {
+                        reply(res);
+
+                        var deleteQuery = 'DROP TABLE "' + allTable.toString().replace(/,/g,'","') + '"';
+                        console.log("[" + currentID + "] " + deleteQuery);
+
+                        return utils.queryPostgres(client, deleteQuery)
+                    }).then(dbres => {
+                        console.log("[" + currentID + "] CLOSE POOL CONNECTION");
                         done();
                     }).catch(error => {
-                        console.error(error);
+                        console.error("[" + currentID + "] " + error);
                         reply(false);
                         return;
                     })

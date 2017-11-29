@@ -4,12 +4,12 @@ I'm still very experimental!!!
 
 ## Known bugs
 - Only bind with `?key`
+- No `OPTIONAL` even inside `SERVICE`
 - Only 2 endpoint
-- Must use `SELECT` inside service
-- No `*`
 - No others operands in the first level except for SERVICE
 - No operands in the most external `SELECT` except `COUNT`
-- Returns always literal (even if URI)
+- Must use `SELECT` inside service
+- No `*`
 
 ## Feature request
 - Better error comunication to the user

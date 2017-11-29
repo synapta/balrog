@@ -22,3 +22,9 @@ exports.csvToPostgres = function (client, tableName, fileName) {
             .on('error', function(error) { reject('Error:', error.message) });
     });
 }
+
+exports.findElementJsonArray = function (arr, propName, propValue) {
+    for (var i = 0; i < arr.length; i++)
+      if (arr[i][propName] == propValue)
+          return arr[i];
+}
