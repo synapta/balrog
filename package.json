@@ -23,6 +23,6 @@
     "pg": "latest",
     "pg-copy-streams": "latest",
     "request": "latest",
-    "sparqljs": "latest"
+    "sparqljs": "1.5.2"
   }
 }
