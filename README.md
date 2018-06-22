@@ -1,7 +1,5 @@
 # Balrog
 
-I'm still very experimental!!!
-
 ## Installation
 You need Postgres 9+ already installed with user `postgres`, password `postgres`
 for a database called `postgres`.
