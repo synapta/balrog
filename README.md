@@ -1,5 +1,9 @@
 # Balrog
 
+Performing federated SPARQL queries is not always easy or doable. Public SPARQL end-points may not be properly configured, or they may time out too quickly for any meaningful federated query to be completed.
+Balrog aims at solving these issues using a local PostgreSQL installation to federate the result sets of two different end-points.
+(In some use cases, we even broke up an ordinary query into two queries for Balrog, in order to quickly work around some time-out issues on the public end-points of big triple stores, such as the one of Wikidata.)
+
 ## Installation
 You need Postgres 9+ already installed with user `postgres`, password `postgres`
 for a database called `postgres`.
